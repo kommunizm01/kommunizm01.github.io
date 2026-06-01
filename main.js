@@ -418,9 +418,21 @@ function bindUi() {
   bindPermission();
   bindLiveLabel();
   bindKeyboard();
+  bindDebugHud();
 
   document.addEventListener("touchstart", onAnyTouch, { passive: true });
   document.addEventListener("mousedown", onAnyTouch);
+}
+
+function bindDebugHud() {
+  if (!els.debug) return;
+  const open = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openSettings();
+  };
+  els.debug.addEventListener("click", open);
+  els.debug.addEventListener("touchstart", open, { passive: false });
 }
 
 function bindKeyboard() {

@@ -81,11 +81,21 @@ body {
   letter-spacing: 0.05em;
   color: var(--ink-soft);
   background: rgba(242, 239, 233, 0.6);
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-radius: 4px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   z-index: 20;
   font-weight: 400;
+  min-height: 36px;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  -webkit-tap-highlight-color: rgba(194, 138, 110, 0.2);
+}
+
+#debug-hud:active {
+  background: rgba(194, 138, 110, 0.15);
 }
 
 .status-message {
