@@ -6,6 +6,7 @@ const DEFAULT_CONFIG = {
   REPLAY_DURATION_SECONDS: 60,
   IDLE_TIMEOUT_SECONDS: 10,
   CAMERA_FACING: "environment",
+  CAMERA_DEVICE_ID: "",
   IMAGE_WIDTH: 1280,
   IMAGE_HEIGHT: 720,
   IMAGE_QUALITY: 0.6,
@@ -45,6 +46,7 @@ const els = {
   settingReplay: document.getElementById("setting-replay"),
   settingIdle: document.getElementById("setting-idle"),
   settingCamera: document.getElementById("setting-camera"),
+  settingDevice: document.getElementById("setting-device"),
   settingQuality: document.getElementById("setting-quality"),
   statFrames: document.getElementById("stat-frames"),
   statStorage: document.getElementById("stat-storage"),
@@ -165,15 +167,17 @@ async function startCamera() {
     state.stream = null;
   }
 
-  const constraints = {
-    audio: false,
-    video: {
-      facingMode: { ideal: config.CAMERA_FACING },
-      width: { ideal: config.IMAGE_WIDTH },
-      height: { ideal: config.IMAGE_HEIGHT },
-      frameRate: { ideal: 30, max: 30 },
-    },
+  const videoConstraints = {
+    width: { ideal: config.IMAGE_WIDTH },
+    height: { ideal: config.IMAGE_HEIGHT },
+    frameRate: { ideal: 30, max: 30 },
   };
+  if (config.CAMERA_DEVICE_ID) {
+    videoConstraints.deviceId = { exact: config.CAMERA_DEVICE_ID };
+  } else {
+    videoConstraints.facingMode = { ideal: config.CAMERA_FACING };
+  }
+  const constraints = { audio: false, video: videoConstraints };
 
   try {
     state.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -652,9 +656,29 @@ async function openSettings() {
   els.settingCamera.value = config.CAMERA_FACING;
   els.settingQuality.value = config.IMAGE_QUALITY;
 
+  await populateDeviceList();
   await updateSettingsStats();
   els.settingsPanel.classList.remove("hidden");
   clearTimeout(state.idleTimer);
+}
+
+async function populateDeviceList() {
+  const sel = els.settingDevice;
+  if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter((d) => d.kind === "videoinput");
+    sel.innerHTML = '<option value="">Auto (use facing)</option>';
+    cams.forEach((d, i) => {
+      const opt = document.createElement("option");
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Camera ${i + 1}`;
+      sel.appendChild(opt);
+    });
+    sel.value = config.CAMERA_DEVICE_ID || "";
+  } catch (err) {
+    console.warn("enumerateDevices failed", err);
+  }
 }
 
 function closeSettings() {
@@ -691,6 +715,7 @@ async function saveSettings() {
   const newReplay = Number(els.settingReplay.value);
   const newIdle = Number(els.settingIdle.value);
   const newCamera = els.settingCamera.value;
+  const newDevice = els.settingDevice ? els.settingDevice.value : "";
   const newQuality = Number(els.settingQuality.value);
 
   if (!Number.isFinite(newInterval) || newInterval < 5) return alert("Interval must be ≥ 5s");
@@ -699,13 +724,14 @@ async function saveSettings() {
   if (!Number.isFinite(newIdle) || newIdle < 5) return alert("Idle timeout must be ≥ 5s");
   if (!Number.isFinite(newQuality) || newQuality < 0.1 || newQuality > 1) return alert("Quality 0.1-1.0");
 
-  const cameraChanged = newCamera !== config.CAMERA_FACING;
+  const cameraChanged = newCamera !== config.CAMERA_FACING || newDevice !== config.CAMERA_DEVICE_ID;
 
   config.CAPTURE_INTERVAL_SECONDS = newInterval;
   config.WINDOW_HOURS = newWindow;
   config.REPLAY_DURATION_SECONDS = newReplay;
   config.IDLE_TIMEOUT_SECONDS = newIdle;
   config.CAMERA_FACING = newCamera;
+  config.CAMERA_DEVICE_ID = newDevice;
   config.IMAGE_QUALITY = newQuality;
   saveConfig();
 
