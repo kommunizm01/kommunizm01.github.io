@@ -73,6 +73,7 @@ const state = {
   playbackIndicatorTimer: null,
   currentObjectUrl: null,
   longPressTimer: null,
+  wrapper: null,         // null = not detected yet, false = browser, object = wrapper info
 };
 
 function loadConfig() {
@@ -100,6 +101,8 @@ function computeFps() {
 }
 
 async function init() {
+  await detectWrapper();
+
   registerServiceWorker();
   requestPersistentStorage();
 
@@ -119,6 +122,23 @@ async function init() {
   await startCamera();
   scheduleNextCapture(0);
   resetIdleTimer();
+}
+
+async function detectWrapper() {
+  try {
+    const res = await fetch("/capabilities.json", { cache: "no-store" });
+    if (!res.ok) { state.wrapper = false; return; }
+    const data = await res.json();
+    if (data && data.wrapper === true) {
+      state.wrapper = data;
+      document.getElementById("app").classList.add("wrapper-mode");
+      console.log("[wrapper] detected:", data);
+    } else {
+      state.wrapper = false;
+    }
+  } catch {
+    state.wrapper = false;
+  }
 }
 
 function registerServiceWorker() {
@@ -163,6 +183,18 @@ function setupVisibilityHandlers() {
 }
 
 async function startCamera() {
+  // Wrapper mode: USB camera served as MJPEG from local Android host.
+  if (state.wrapper) {
+    const stream = document.getElementById("wrapper-stream");
+    if (stream) {
+      // Cache-bust to force fresh stream connection on re-init.
+      stream.src = "/stream.mjpg?t=" + Date.now();
+    }
+    state.stream = { __wrapper: true };  // truthy sentinel so captureLoop runs
+    els.permissionPrompt.classList.add("hidden");
+    return;
+  }
+
   if (state.stream) {
     state.stream.getTracks().forEach((t) => t.stop());
     state.stream = null;
@@ -223,18 +255,33 @@ async function captureLoop() {
 }
 
 async function captureFrame() {
-  if (!state.stream || !els.video.videoWidth) return;
+  let blob;
 
-  const canvas = els.canvas;
-  canvas.width = config.IMAGE_WIDTH;
-  canvas.height = config.IMAGE_HEIGHT;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(els.video, 0, 0, canvas.width, canvas.height);
+  if (state.wrapper) {
+    // Wrapper mode: pull JPEG straight from the local Android server.
+    try {
+      const res = await fetch("/snapshot.jpg?t=" + Date.now(), { cache: "no-store" });
+      if (!res.ok) return;
+      blob = await res.blob();
+      if (!blob || blob.size === 0) return;
+    } catch (err) {
+      console.warn("Snapshot fetch failed", err);
+      return;
+    }
+  } else {
+    if (!state.stream || !els.video.videoWidth) return;
 
-  const blob = await new Promise((resolve) =>
-    canvas.toBlob(resolve, "image/jpeg", config.IMAGE_QUALITY)
-  );
-  if (!blob) return;
+    const canvas = els.canvas;
+    canvas.width = config.IMAGE_WIDTH;
+    canvas.height = config.IMAGE_HEIGHT;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(els.video, 0, 0, canvas.width, canvas.height);
+
+    blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", config.IMAGE_QUALITY)
+    );
+    if (!blob) return;
+  }
 
   const ts = Date.now();
 

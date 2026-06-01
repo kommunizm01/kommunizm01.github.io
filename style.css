@@ -46,6 +46,7 @@ body {
 }
 
 #camera-video,
+#wrapper-stream,
 #display-image {
   position: absolute;
   inset: 0;
@@ -58,21 +59,17 @@ body {
   pointer-events: none;   /* display-only; never swallow taps meant for HUD/timeline */
 }
 
-#camera-video {
-  z-index: 1;
-}
+#camera-video { z-index: 1; }
+#wrapper-stream { z-index: 1; display: none; }    /* shown only in wrapper mode */
+#display-image { z-index: 2; }
 
-#display-image {
-  z-index: 2;
-}
+#app.mode-live #display-image { display: none; }
+#app:not(.mode-live) #camera-video,
+#app:not(.mode-live) #wrapper-stream { visibility: hidden; }
 
-#app.mode-live #display-image {
-  display: none;
-}
-
-#app:not(.mode-live) #camera-video {
-  visibility: hidden;
-}
+/* in wrapper mode, hide native video, show MJPEG img */
+#app.wrapper-mode #camera-video { display: none; }
+#app.wrapper-mode #wrapper-stream { display: block; }
 
 #debug-hud {
   position: absolute;
