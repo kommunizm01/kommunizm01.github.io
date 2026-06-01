@@ -56,6 +56,7 @@ const els = {
   settingsCloseBtn: document.getElementById("settings-close-btn"),
   debug: document.getElementById("debug-hud"),
   app: document.getElementById("app"),
+  settingsBtn: document.getElementById("settings-btn"),
 };
 
 const state = {
@@ -425,14 +426,21 @@ function bindUi() {
 }
 
 function bindDebugHud() {
-  if (!els.debug) return;
   const open = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    console.log("[settings] opening via", e.currentTarget?.id || e.type);
     openSettings();
   };
-  els.debug.addEventListener("click", open);
-  els.debug.addEventListener("touchstart", open, { passive: false });
+  if (els.debug) {
+    els.debug.addEventListener("click", open);
+    els.debug.addEventListener("touchstart", open, { passive: false });
+  }
+  if (els.settingsBtn) {
+    els.settingsBtn.addEventListener("click", open);
+    els.settingsBtn.addEventListener("touchstart", open, { passive: false });
+    els.settingsBtn.addEventListener("pointerdown", open);
+  }
 }
 
 function bindKeyboard() {
