@@ -205,9 +205,12 @@ async function startCamera() {
     state.stream = null;
   }
 
+  // Ask for the camera's max resolution: pass absurdly high "ideal" values so
+  // the browser/UA negotiates the largest supported mode. Actual size is read
+  // back via videoWidth/videoHeight after the stream starts and used at capture.
   const videoConstraints = {
-    width: { ideal: config.IMAGE_WIDTH },
-    height: { ideal: config.IMAGE_HEIGHT },
+    width: { ideal: 4096 },
+    height: { ideal: 2160 },
     frameRate: { ideal: 30, max: 30 },
   };
   if (config.CAMERA_DEVICE_ID) {
@@ -224,6 +227,9 @@ async function startCamera() {
       if (els.video.readyState >= 2) return resolve();
       els.video.onloadedmetadata = () => resolve();
     });
+    const track = state.stream.getVideoTracks()[0];
+    const s = track && track.getSettings ? track.getSettings() : {};
+    console.log(`[camera] negotiated ${s.width}x${s.height} @ ${s.frameRate}fps`);
     els.permissionPrompt.classList.add("hidden");
   } catch (err) {
     console.error("Camera access failed", err);
@@ -276,9 +282,11 @@ async function captureFrame() {
   } else {
     if (!state.stream || !els.video.videoWidth) return;
 
+    // Capture at the camera's actual native resolution rather than the legacy
+    // IMAGE_WIDTH/HEIGHT config — preserves whatever the device negotiated.
     const canvas = els.canvas;
-    canvas.width = config.IMAGE_WIDTH;
-    canvas.height = config.IMAGE_HEIGHT;
+    canvas.width = els.video.videoWidth;
+    canvas.height = els.video.videoHeight;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(els.video, 0, 0, canvas.width, canvas.height);
 
