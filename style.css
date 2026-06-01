@@ -55,6 +55,7 @@ body {
   background: var(--cream);
   display: block;
   -webkit-user-drag: none;
+  pointer-events: none;   /* display-only; never swallow taps meant for HUD/timeline */
 }
 
 #camera-video {
@@ -85,7 +86,8 @@ body {
   border-radius: 4px;
   pointer-events: auto;
   cursor: pointer;
-  z-index: 20;
+  z-index: 40;
+  touch-action: manipulation;
   font-weight: 400;
   min-height: 36px;
   min-width: 80px;
