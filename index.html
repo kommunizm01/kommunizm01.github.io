@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#F2EFE9" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>Aral Soap Timelapse</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.png" />
+  <link rel="apple-touch-icon" href="icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <video id="camera-video" autoplay playsinline muted></video>
+    <canvas id="capture-canvas"></canvas>
+
+    <img id="display-image" alt="" />
+
+    <div id="status-message" class="status-message">Capturing first frames…</div>
+
+    <div id="rec-dot" class="rec-dot" aria-hidden="true"></div>
+
+    <div id="debug-hud">starting…</div>
+
+    <div id="playback-indicator" class="playback-indicator">Playing back the last 72 hours</div>
+
+    <div id="timeline">
+      <div id="timeline-track">
+        <div id="timeline-fill"></div>
+        <div id="timeline-thumb"></div>
+      </div>
+      <div id="timeline-labels"></div>
+    </div>
+
+    <div id="long-press-zone" aria-hidden="true"></div>
+
+    <div id="permission-prompt" class="overlay hidden">
+      <div class="overlay-card">
+        <h1>Camera access needed</h1>
+        <p id="permission-message">Allow the camera to begin the timelapse.</p>
+        <button id="grant-camera-btn">Grant camera access</button>
+      </div>
+    </div>
+
+    <div id="settings-panel" class="overlay hidden">
+      <div class="overlay-card settings-card">
+        <h1>Settings</h1>
+
+        <label>
+          Capture interval (seconds)
+          <input type="number" id="setting-interval" min="5" step="1" />
+        </label>
+
+        <label>
+          Window (hours)
+          <input type="number" id="setting-window" min="1" step="1" />
+        </label>
+
+        <label>
+          Replay duration (seconds)
+          <input type="number" id="setting-replay" min="5" step="1" />
+        </label>
+
+        <label>
+          Idle timeout (seconds)
+          <input type="number" id="setting-idle" min="5" step="1" />
+        </label>
+
+        <label>
+          Camera
+          <select id="setting-camera">
+            <option value="environment">Rear</option>
+            <option value="user">Front</option>
+          </select>
+        </label>
+
+        <label>
+          Image quality (0.1 - 1.0)
+          <input type="number" id="setting-quality" min="0.1" max="1" step="0.05" />
+        </label>
+
+        <div class="settings-stats">
+          <div><span>Frames stored:</span> <span id="stat-frames">—</span></div>
+          <div><span>Storage used:</span> <span id="stat-storage">—</span></div>
+          <div><span>Oldest frame:</span> <span id="stat-oldest">—</span></div>
+        </div>
+
+        <div class="settings-actions">
+          <button id="settings-save-btn">Save & restart capture</button>
+          <button id="settings-clear-btn" class="danger">Clear all frames</button>
+          <button id="settings-close-btn">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/dexie@4.0.8/dist/dexie.min.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

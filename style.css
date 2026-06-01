@@ -1,0 +1,596 @@
+:root {
+  --cream: #F2EFE9;
+  --cream-deep: #E8E4DA;
+  --ink: #2A2722;
+  --ink-soft: #6B655B;
+  --terracotta: #C28A6E;
+  --terracotta-soft: rgba(194, 138, 110, 0.4);
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  background: var(--cream);
+}
+
+#capture-canvas {
+  position: absolute;
+  left: -10000px;
+  top: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#camera-video,
+#display-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--cream);
+  display: block;
+  -webkit-user-drag: none;
+}
+
+#camera-video {
+  z-index: 1;
+}
+
+#display-image {
+  z-index: 2;
+}
+
+#app.mode-live #display-image {
+  display: none;
+}
+
+#app:not(.mode-live) #camera-video {
+  visibility: hidden;
+}
+
+#debug-hud {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  background: rgba(242, 239, 233, 0.6);
+  padding: 6px 10px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 20;
+  font-weight: 400;
+}
+
+.status-message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--ink-soft);
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: 0.05em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.status-message.hidden {
+  display: none;
+}
+
+.rec-dot {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--terracotta);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+  box-shadow: 0 0 0 0 var(--terracotta-soft);
+}
+
+.rec-dot.active {
+  opacity: 1;
+  animation: rec-pulse 1.2s ease-out;
+}
+
+@keyframes rec-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--terracotta-soft);
+  }
+  100% {
+    box-shadow: 0 0 0 12px rgba(194, 138, 110, 0);
+  }
+}
+
+.playback-indicator {
+  position: absolute;
+  bottom: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--ink-soft);
+  font-size: 14px;
+  letter-spacing: 0.15em;
+  text-transform: lowercase;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  pointer-events: none;
+}
+
+.playback-indicator.visible {
+  opacity: 0.7;
+}
+
+/* ─── Timeline ─────────────────────────────────────────────────────
+ * Concept: a hand-drawn thread across cream paper.
+ * The thumb is a small clay bead — wheel-thrown, glazed terracotta,
+ * not a media-player slider. Touch hit-area is generous (≥44px)
+ * but the visible line is a single hairline.
+ * ────────────────────────────────────────────────────────────────── */
+
+#timeline {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 18px clamp(28px, 4vw, 56px) 22px;
+  background:
+    linear-gradient(
+      to top,
+      rgba(242, 239, 233, 0.96) 0%,
+      rgba(242, 239, 233, 0.85) 55%,
+      rgba(242, 239, 233, 0) 100%
+    );
+  z-index: 10;
+}
+
+#timeline-track {
+  position: relative;
+  height: 44px;            /* touch hit area */
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* the rail: a single charcoal hairline */
+#timeline-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: rgba(42, 39, 34, 0.18);
+  transform: translateY(-0.5px);
+}
+
+/* a second, finer ghost line just below — gives the rail a sense of
+   being pressed into the paper rather than floating on it */
+#timeline-track::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 1px);
+  height: 1px;
+  background: rgba(242, 239, 233, 0.9);
+  transform: translateY(-0.5px);
+}
+
+#timeline-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 1px;
+  width: 100%;
+  background: linear-gradient(
+    to right,
+    rgba(42, 39, 34, 0.28) 0%,
+    rgba(133, 92, 71, 0.55) 100%
+  );
+  transform: translateY(-0.5px);
+  pointer-events: none;
+  transition: width 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#timeline-track.dragging #timeline-fill {
+  transition: none;        /* immediate during user drag */
+}
+
+/* the clay bead */
+#timeline-thumb {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  z-index: 3;
+  /* glaze: warm core, slightly cooler rim, off-center highlight */
+  background:
+    radial-gradient(
+      circle at 38% 32%,
+      #E2B498 0%,
+      #C28A6E 42%,
+      #A87155 90%
+    );
+  box-shadow:
+    /* throwline — a faint ring as if scored on the wheel */
+    inset 0 0 0 0.5px rgba(80, 40, 20, 0.35),
+    /* inner glaze depth */
+    inset 0 -2px 3px rgba(80, 40, 20, 0.18),
+    /* soft kiln glow */
+    0 0 0 0 rgba(194, 138, 110, 0),
+    /* contact shadow on cream */
+    0 1px 2px rgba(80, 50, 30, 0.18),
+    0 2px 6px rgba(80, 50, 30, 0.08);
+  transform: translate(-50%, -50%) rotate(-3deg);
+  pointer-events: none;
+  transition:
+    transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#timeline-track.dragging #timeline-thumb {
+  transform: translate(-50%, -50%) rotate(2deg) scale(1.18);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(80, 40, 20, 0.45),
+    inset 0 -2px 3px rgba(80, 40, 20, 0.22),
+    0 0 0 8px rgba(194, 138, 110, 0.12),
+    0 3px 8px rgba(80, 50, 30, 0.22),
+    0 6px 16px rgba(80, 50, 30, 0.1);
+}
+
+/* mode-live: the bead glows faintly, as if still warm from the kiln */
+#app.mode-live #timeline-thumb {
+  box-shadow:
+    inset 0 0 0 0.5px rgba(80, 40, 20, 0.35),
+    inset 0 -2px 3px rgba(80, 40, 20, 0.18),
+    0 0 0 5px rgba(194, 138, 110, 0.10),
+    0 0 14px rgba(194, 138, 110, 0.22),
+    0 1px 2px rgba(80, 50, 30, 0.18),
+    0 2px 6px rgba(80, 50, 30, 0.08);
+}
+
+/* mode-idle-playback: bead has a soft breath */
+#app.mode-idle-playback #timeline-thumb {
+  animation: bead-breath 4.2s ease-in-out infinite;
+}
+
+@keyframes bead-breath {
+  0%, 100% { box-shadow:
+    inset 0 0 0 0.5px rgba(80, 40, 20, 0.35),
+    inset 0 -2px 3px rgba(80, 40, 20, 0.18),
+    0 0 0 0 rgba(194, 138, 110, 0),
+    0 1px 2px rgba(80, 50, 30, 0.18),
+    0 2px 6px rgba(80, 50, 30, 0.08); }
+  50% { box-shadow:
+    inset 0 0 0 0.5px rgba(80, 40, 20, 0.35),
+    inset 0 -2px 3px rgba(80, 40, 20, 0.18),
+    0 0 0 6px rgba(194, 138, 110, 0.10),
+    0 1px 2px rgba(80, 50, 30, 0.18),
+    0 2px 6px rgba(80, 50, 30, 0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #timeline-thumb,
+  #app.mode-idle-playback #timeline-thumb {
+    animation: none;
+    transition: transform 0.05s linear;
+  }
+  #timeline-fill { transition: none; }
+}
+
+/* ─── Labels ─────────────────────────────────────────────────────── */
+
+#timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-top: 12px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+  font-variant-numeric: tabular-nums;
+}
+
+/* each label gets a thin tick mark above, drawn as if with a fine pen */
+#timeline-labels > span,
+#timeline-labels > .tl-live {
+  position: relative;
+  padding-top: 10px;
+  color: rgba(107, 101, 91, 0.78);
+}
+
+#timeline-labels > span::before,
+#timeline-labels > .tl-live::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  width: 1px;
+  height: 5px;
+  background: rgba(42, 39, 34, 0.22);
+  transform: translateX(-0.5px);
+}
+
+/* outer labels: keep tick aligned to the rail end, not centered on text */
+#timeline-labels > span:first-child::before {
+  left: 0;
+  transform: none;
+}
+
+#timeline-labels > .tl-live::before {
+  left: auto;
+  right: 0;
+  transform: none;
+  background: var(--terracotta);
+  opacity: 0.55;
+}
+
+/* ─── Live button: a tactile pill, not a slider control ──────────── */
+
+#timeline-labels .tl-live {
+  appearance: none;
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  text-transform: lowercase;
+  color: var(--terracotta);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  pointer-events: auto;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px 8px 13px;
+  margin: -8px -14px -8px -13px;  /* visual stays in line */
+  border-radius: 999px;
+  min-height: 36px;
+  font-weight: 400;
+
+  transition:
+    background 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* the small living dot — kiln-light next to the word */
+#timeline-labels .tl-live::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--terracotta);
+  opacity: 0.35;
+  transition: opacity 0.25s ease, box-shadow 0.4s ease;
+}
+
+#timeline-labels .tl-live:hover {
+  background: rgba(194, 138, 110, 0.08);
+}
+
+#timeline-labels .tl-live:active {
+  transform: scale(0.96);
+  background: rgba(194, 138, 110, 0.16);
+}
+
+#timeline-labels .tl-live:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(194, 138, 110, 0.35);
+}
+
+/* in live mode: the dot is "lit", word is filled-warm, soft inset */
+#app.mode-live #timeline-labels .tl-live {
+  background: rgba(194, 138, 110, 0.10);
+  color: #8E5740;
+}
+
+#app.mode-live #timeline-labels .tl-live::after {
+  opacity: 1;
+  box-shadow:
+    0 0 0 2px rgba(194, 138, 110, 0.18),
+    0 0 6px rgba(194, 138, 110, 0.45);
+  animation: live-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { box-shadow:
+    0 0 0 2px rgba(194, 138, 110, 0.16),
+    0 0 5px rgba(194, 138, 110, 0.35); }
+  50% { box-shadow:
+    0 0 0 3px rgba(194, 138, 110, 0.22),
+    0 0 9px rgba(194, 138, 110, 0.55); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app.mode-live #timeline-labels .tl-live::after { animation: none; }
+}
+
+/* in scrubbed/idle modes: the dot dims so live reads as the "go home" call */
+#app.mode-scrubbed #timeline-labels .tl-live,
+#app.mode-idle-playback #timeline-labels .tl-live {
+  background: transparent;
+}
+
+#app.mode-scrubbed #timeline-labels .tl-live::after,
+#app.mode-idle-playback #timeline-labels .tl-live::after {
+  opacity: 0.30;
+}
+
+#long-press-zone {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 56px;
+  height: 56px;
+  z-index: 15;            /* above #timeline (z 10) so mouse long-press works */
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(242, 239, 233, 0.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.overlay-card {
+  background: var(--cream);
+  border: 1px solid var(--cream-deep);
+  border-radius: 12px;
+  padding: 32px;
+  max-width: 480px;
+  width: calc(100% - 64px);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.08);
+}
+
+.overlay-card h1 {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  margin-bottom: 18px;
+  color: var(--ink);
+}
+
+.overlay-card p {
+  font-size: 16px;
+  font-weight: 300;
+  color: var(--ink-soft);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.overlay-card button {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 400;
+  background: var(--terracotta);
+  color: var(--cream);
+  border: none;
+  padding: 14px 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+
+.overlay-card button:active {
+  opacity: 0.8;
+}
+
+.overlay-card button.danger {
+  background: transparent;
+  color: var(--terracotta);
+  border: 1px solid var(--terracotta);
+}
+
+.settings-card {
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.settings-card label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--cream-deep);
+  font-size: 15px;
+  color: var(--ink);
+  font-weight: 300;
+}
+
+.settings-card input,
+.settings-card select {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  width: 140px;
+  padding: 8px 12px;
+  border: 1px solid var(--cream-deep);
+  border-radius: 4px;
+  background: var(--cream);
+  color: var(--ink);
+  text-align: right;
+}
+
+.settings-stats {
+  margin: 20px 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--cream-deep);
+  border-bottom: 1px solid var(--cream-deep);
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+.settings-stats > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.settings-actions button {
+  flex: 1;
+  min-width: 150px;
+  padding: 12px 18px;
+  font-size: 14px;
+}
+
+#settings-close-btn {
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px solid var(--cream-deep);
+}

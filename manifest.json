@@ -1,0 +1,19 @@
+{
+  "name": "Aral Soap Timelapse",
+  "short_name": "Timelapse",
+  "description": "72-hour rolling timelapse capture and playback for the Aral soap workshop.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#F2EFE9",
+  "theme_color": "#F2EFE9",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
