@@ -52,8 +52,13 @@ const els = {
   statStorage: document.getElementById("stat-storage"),
   statOldest: document.getElementById("stat-oldest"),
   settingsSaveBtn: document.getElementById("settings-save-btn"),
+  settingsExportBtn: document.getElementById("settings-export-btn"),
   settingsClearBtn: document.getElementById("settings-clear-btn"),
   settingsCloseBtn: document.getElementById("settings-close-btn"),
+  exportProgress: document.getElementById("export-progress"),
+  exportProgressFill: document.querySelector("#export-progress .export-progress-fill"),
+  exportProgressCount: document.querySelector("#export-progress .export-progress-count"),
+  exportProgressLabel: document.querySelector("#export-progress .export-progress-label"),
   debug: document.getElementById("debug-hud"),
   app: document.getElementById("app"),
   settingsBtn: document.getElementById("settings-btn"),
@@ -622,6 +627,7 @@ function bindSettings() {
   els.settingsCloseBtn.addEventListener("click", closeSettings);
   els.settingsSaveBtn.addEventListener("click", saveSettings);
   els.settingsClearBtn.addEventListener("click", clearAllFrames);
+  if (els.settingsExportBtn) els.settingsExportBtn.addEventListener("click", exportVideo);
 }
 
 function bindPermission() {
@@ -827,6 +833,198 @@ async function clearAllFrames() {
   await updateSettingsStats();
   renderTimelineLabels();
   updateTimelineThumb(1);
+}
+
+/* ───────── Video export ──────────────────────────────────────────────
+ * Plays every stored frame onto an offscreen canvas at REPLAY_DURATION
+ * pace, captures the canvas via MediaStream, and records to WebM via
+ * MediaRecorder. Output: a single .webm download. WebM is the only
+ * format MediaRecorder ships across browsers without extra libs; users
+ * can convert to MP4 with ffmpeg offline if needed.
+ * ──────────────────────────────────────────────────────────────────── */
+
+async function exportVideo() {
+  if (state.frameIndex.length < 2) {
+    alert("Not enough frames to export. Wait until at least a few captures land.");
+    return;
+  }
+  if (typeof MediaRecorder === "undefined" || !HTMLCanvasElement.prototype.captureStream) {
+    alert("Video export not supported by this browser.");
+    return;
+  }
+
+  const totalFrames = state.frameIndex.length;
+  const targetFps = Math.max(1, Math.round(computeFps()));
+  const frameIntervalMs = 1000 / targetFps;
+
+  // Pick a usable mime type — VP9 is best, fall back to VP8, then naked WebM.
+  const candidates = [
+    "video/webm;codecs=vp9",
+    "video/webm;codecs=vp8",
+    "video/webm",
+  ];
+  const mimeType = candidates.find((m) => MediaRecorder.isTypeSupported(m));
+  if (!mimeType) {
+    alert("No supported video encoder found.");
+    return;
+  }
+
+  // Probe one frame to lock canvas dimensions to actual image size — handles
+  // wrapper-mode 640x360 vs browser-mode 1280x720 uniformly.
+  const firstFrame = await db.frames.get(state.frameIndex[0]);
+  const firstImg = await blobToImage(firstFrame.blob);
+  const w = firstImg.naturalWidth || config.IMAGE_WIDTH;
+  const h = firstImg.naturalHeight || config.IMAGE_HEIGHT;
+  URL.revokeObjectURL(firstImg.src);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#F2EFE9";
+  ctx.fillRect(0, 0, w, h);
+
+  const stream = canvas.captureStream(targetFps);
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 4_000_000,
+  });
+
+  let recorderErrored = null;
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+  recorder.onerror = (e) => { recorderErrored = e.error || new Error("recorder error"); };
+
+  const stopped = new Promise((resolve) => {
+    recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
+  });
+
+  // Disable buttons + show progress.
+  setExportUiState(true);
+  showExportProgress(0, totalFrames, "Encoding timelapse…");
+
+  recorder.start(250);  // emit a chunk every 250ms so memory doesn't balloon
+
+  try {
+    let lastTickMs = performance.now();
+    for (let i = 0; i < totalFrames; i++) {
+      if (recorderErrored) throw recorderErrored;
+
+      const ts = state.frameIndex[i];
+      const frame = await db.frames.get(ts);
+      if (!frame || !frame.blob) continue;
+
+      const img = await blobToImage(frame.blob);
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(img.src);
+
+      showExportProgress(i + 1, totalFrames);
+
+      // Pace the playback so MediaRecorder captures at targetFps.
+      const elapsed = performance.now() - lastTickMs;
+      const wait = Math.max(0, frameIntervalMs - elapsed);
+      if (wait > 0) await sleep(wait);
+      lastTickMs = performance.now();
+    }
+
+    // Flush: hold the last frame visible briefly so the recorder grabs it.
+    await sleep(Math.max(250, frameIntervalMs * 2));
+
+    showExportProgress(totalFrames, totalFrames, "Finalizing…");
+    recorder.stop();
+    const blob = await stopped;
+
+    if (!blob || blob.size === 0) throw new Error("Recorder produced empty output");
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = `aral-timelapse-${stamp}.webm`;
+    triggerDownload(blob, filename);
+
+    showExportProgress(totalFrames, totalFrames, `Saved ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
+    setTimeout(() => hideExportProgress(), 4000);
+  } catch (err) {
+    console.error("Export failed", err);
+    showExportProgress(0, totalFrames, "Export failed — see console");
+    try { recorder.stop(); } catch {}
+    setTimeout(() => hideExportProgress(), 4000);
+  } finally {
+    stream.getTracks().forEach((t) => t.stop());
+    setExportUiState(false);
+  }
+}
+
+function blobToImage(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function triggerDownload(blob, filename) {
+  // In wrapper mode, Android WebView's DownloadListener can decode data: URLs
+  // but not blob: URLs (no JS-to-Kotlin blob bridge). Read the blob as a base64
+  // data URL so the wrapper writes it to /sdcard/Download. In a browser, the
+  // blob URL is fine and avoids loading the whole video into a base64 string.
+  if (state.wrapper) {
+    const dataUrl = await blobToDataUrl(blob);
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 1000);
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 5000);
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function showExportProgress(done, total, label) {
+  if (!els.exportProgress) return;
+  els.exportProgress.classList.remove("hidden");
+  if (label && els.exportProgressLabel) els.exportProgressLabel.textContent = label;
+  if (els.exportProgressCount) els.exportProgressCount.textContent = `${done} / ${total}`;
+  if (els.exportProgressFill) {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    els.exportProgressFill.style.width = `${pct}%`;
+  }
+}
+
+function hideExportProgress() {
+  if (!els.exportProgress) return;
+  els.exportProgress.classList.add("hidden");
+}
+
+function setExportUiState(busy) {
+  [els.settingsSaveBtn, els.settingsClearBtn, els.settingsExportBtn, els.settingsCloseBtn].forEach((b) => {
+    if (b) b.disabled = !!busy;
+  });
 }
 
 init().catch((err) => {

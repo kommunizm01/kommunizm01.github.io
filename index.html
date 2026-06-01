@@ -104,8 +104,15 @@
 
         <div class="settings-actions">
           <button id="settings-save-btn">Save & restart capture</button>
+          <button id="settings-export-btn">Export timelapse video</button>
           <button id="settings-clear-btn" class="danger">Clear all frames</button>
           <button id="settings-close-btn">Close</button>
+        </div>
+
+        <div id="export-progress" class="export-progress hidden">
+          <div class="export-progress-label">Encoding timelapse…</div>
+          <div class="export-progress-bar"><div class="export-progress-fill"></div></div>
+          <div class="export-progress-count">0 / 0</div>
         </div>
       </div>
     </div>

@@ -646,3 +646,42 @@ body {
   color: var(--ink-soft);
   border: 1px solid var(--cream-deep);
 }
+
+.export-progress {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--cream-deep);
+  border-radius: 6px;
+  background: rgba(194, 138, 110, 0.06);
+}
+
+.export-progress.hidden { display: none; }
+
+.export-progress-label {
+  font-size: 13px;
+  color: var(--ink);
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+.export-progress-bar {
+  height: 4px;
+  background: var(--cream-deep);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.export-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--terracotta);
+  transition: width 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.export-progress-count {
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+}
