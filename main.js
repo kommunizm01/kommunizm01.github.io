@@ -192,27 +192,30 @@ function setupVisibilityHandlers() {
 }
 
 async function startCamera() {
-  // Wrapper mode: dispatch on transport reported in capabilities.
+  // Wrapper mode: ALWAYS bring up MJPEG first so we never go blank, then
+  // opportunistically try to upgrade to WebRTC if the server advertises it.
+  // Over flaky networks (hotspot UDP blocks, etc.) WebRTC can hang silently —
+  // MJPEG keeps the live preview running while WebRTC negotiates.
   if (state.wrapper) {
-    const transport = (state.wrapper.transport || "mjpeg").toLowerCase();
-    if (transport === "webrtc" && typeof RTCPeerConnection !== "undefined") {
-      const ok = await startWebRTC();
-      if (ok) {
-        state.stream = { __wrapper: true, __webrtc: true };
-        els.permissionPrompt.classList.add("hidden");
-        return;
-      }
-      console.warn("[wrapper] WebRTC failed, falling back to MJPEG");
-      document.getElementById("app").classList.remove("wrapper-webrtc");
-      document.getElementById("app").classList.add("wrapper-mjpeg");
-    }
-    // MJPEG fallback path (or primary, when transport=mjpeg).
+    const app = document.getElementById("app");
+    app.classList.remove("wrapper-webrtc");
+    app.classList.add("wrapper-mjpeg");
+
     const stream = document.getElementById("wrapper-stream");
     if (stream) {
       stream.src = "/stream.mjpg?t=" + Date.now();
     }
     state.stream = { __wrapper: true };
     els.permissionPrompt.classList.add("hidden");
+
+    const transport = (state.wrapper.transport || "mjpeg").toLowerCase();
+    if (transport === "webrtc" && typeof RTCPeerConnection !== "undefined") {
+      // Don't await — let MJPEG keep streaming while WebRTC negotiates in the
+      // background. On success, ontrack handler swaps the visible element.
+      startWebRTC().then((ok) => {
+        if (!ok) console.warn("[wrapper] WebRTC failed, staying on MJPEG");
+      });
+    }
     return;
   }
 
@@ -255,38 +258,61 @@ async function startCamera() {
 
 async function startWebRTC() {
   try {
-    // Tear down any prior peer connection.
     if (state.webrtcPc) {
       try { state.webrtcPc.close(); } catch {}
       state.webrtcPc = null;
     }
 
-    const pc = new RTCPeerConnection({ iceServers: [] });   // LAN-only, no STUN/TURN
+    const pc = new RTCPeerConnection({ iceServers: [] });
     state.webrtcPc = pc;
 
-    // Request video-only, receive-only.
     pc.addTransceiver("video", { direction: "recvonly" });
 
+    let trackUpgradeApplied = false;
     pc.ontrack = (event) => {
       const remoteStream = event.streams[0];
       if (!remoteStream) return;
       console.log("[webrtc] track received");
       els.video.srcObject = remoteStream;
-      els.video.play().catch((e) => console.warn("video.play() rejected", e));
+      els.video.play().catch((e) => console.warn("[webrtc] video.play() rejected", e));
+
+      // Wait for actual frames before swapping MJPEG → video, otherwise we
+      // can leave the user staring at a black <video> element while ICE
+      // is still finalizing.
+      const swap = () => {
+        if (trackUpgradeApplied) return;
+        trackUpgradeApplied = true;
+        const app = document.getElementById("app");
+        app.classList.remove("wrapper-mjpeg");
+        app.classList.add("wrapper-webrtc");
+        console.log("[webrtc] swapped to <video>");
+      };
+      if (els.video.readyState >= 2) swap();
+      else els.video.addEventListener("loadeddata", swap, { once: true });
     };
 
     pc.oniceconnectionstatechange = () => {
       console.log("[webrtc] ICE state:", pc.iceConnectionState);
       if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
-        // Surface in console; PWA can be reloaded by user.
-        console.warn("[webrtc] connection lost");
+        if (trackUpgradeApplied) {
+          // We had video and lost it — drop back to MJPEG.
+          console.warn("[webrtc] lost — reverting to MJPEG");
+          const app = document.getElementById("app");
+          app.classList.remove("wrapper-webrtc");
+          app.classList.add("wrapper-mjpeg");
+          els.video.srcObject = null;
+          // Kick MJPEG <img> into reloading the stream.
+          const s = document.getElementById("wrapper-stream");
+          if (s) s.src = "/stream.mjpg?t=" + Date.now();
+        }
+        try { pc.close(); } catch {}
+        state.webrtcPc = null;
       }
     };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    // Wait for ICE gathering to complete (non-trickle, simpler handshake).
     await new Promise((resolve) => {
       if (pc.iceGatheringState === "complete") return resolve();
       const onChange = () => {
@@ -296,24 +322,24 @@ async function startWebRTC() {
         }
       };
       pc.addEventListener("icegatheringstatechange", onChange);
-      // Hard timeout: 3s. LAN ICE usually finishes in <300ms.
       setTimeout(resolve, 3000);
     });
 
+    const controller = new AbortController();
+    const reqTimeout = setTimeout(() => controller.abort(), 6000);
     const res = await fetch("/webrtc/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sdp: pc.localDescription.sdp,
-        type: pc.localDescription.type,
-      }),
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+      signal: controller.signal,
     });
+    clearTimeout(reqTimeout);
     if (!res.ok) throw new Error(`/webrtc/connect HTTP ${res.status}`);
     const answer = await res.json();
     if (!answer.sdp || !answer.type) throw new Error("Bad answer payload");
 
     await pc.setRemoteDescription(new RTCSessionDescription({ sdp: answer.sdp, type: answer.type }));
-    console.log("[webrtc] connection established");
+    console.log("[webrtc] handshake done — awaiting track");
     return true;
   } catch (err) {
     console.error("[webrtc] failed", err);
