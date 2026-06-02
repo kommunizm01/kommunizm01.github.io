@@ -79,6 +79,7 @@ const state = {
   currentObjectUrl: null,
   longPressTimer: null,
   wrapper: null,         // null = not detected yet, false = browser, object = wrapper info
+  webrtcPc: null,        // active RTCPeerConnection when wrapper transport=webrtc
 };
 
 function loadConfig() {
@@ -136,7 +137,10 @@ async function detectWrapper() {
     const data = await res.json();
     if (data && data.wrapper === true) {
       state.wrapper = data;
-      document.getElementById("app").classList.add("wrapper-mode");
+      const app = document.getElementById("app");
+      app.classList.add("wrapper-mode");
+      const transport = (data.transport || "mjpeg").toLowerCase();
+      app.classList.add(`wrapper-${transport}`);
       console.log("[wrapper] detected:", data);
     } else {
       state.wrapper = false;
@@ -188,14 +192,26 @@ function setupVisibilityHandlers() {
 }
 
 async function startCamera() {
-  // Wrapper mode: USB camera served as MJPEG from local Android host.
+  // Wrapper mode: dispatch on transport reported in capabilities.
   if (state.wrapper) {
+    const transport = (state.wrapper.transport || "mjpeg").toLowerCase();
+    if (transport === "webrtc" && typeof RTCPeerConnection !== "undefined") {
+      const ok = await startWebRTC();
+      if (ok) {
+        state.stream = { __wrapper: true, __webrtc: true };
+        els.permissionPrompt.classList.add("hidden");
+        return;
+      }
+      console.warn("[wrapper] WebRTC failed, falling back to MJPEG");
+      document.getElementById("app").classList.remove("wrapper-webrtc");
+      document.getElementById("app").classList.add("wrapper-mjpeg");
+    }
+    // MJPEG fallback path (or primary, when transport=mjpeg).
     const stream = document.getElementById("wrapper-stream");
     if (stream) {
-      // Cache-bust to force fresh stream connection on re-init.
       stream.src = "/stream.mjpg?t=" + Date.now();
     }
-    state.stream = { __wrapper: true };  // truthy sentinel so captureLoop runs
+    state.stream = { __wrapper: true };
     els.permissionPrompt.classList.add("hidden");
     return;
   }
@@ -234,6 +250,78 @@ async function startCamera() {
   } catch (err) {
     console.error("Camera access failed", err);
     showPermissionPrompt(err);
+  }
+}
+
+async function startWebRTC() {
+  try {
+    // Tear down any prior peer connection.
+    if (state.webrtcPc) {
+      try { state.webrtcPc.close(); } catch {}
+      state.webrtcPc = null;
+    }
+
+    const pc = new RTCPeerConnection({ iceServers: [] });   // LAN-only, no STUN/TURN
+    state.webrtcPc = pc;
+
+    // Request video-only, receive-only.
+    pc.addTransceiver("video", { direction: "recvonly" });
+
+    pc.ontrack = (event) => {
+      const remoteStream = event.streams[0];
+      if (!remoteStream) return;
+      console.log("[webrtc] track received");
+      els.video.srcObject = remoteStream;
+      els.video.play().catch((e) => console.warn("video.play() rejected", e));
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("[webrtc] ICE state:", pc.iceConnectionState);
+      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        // Surface in console; PWA can be reloaded by user.
+        console.warn("[webrtc] connection lost");
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Wait for ICE gathering to complete (non-trickle, simpler handshake).
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") return resolve();
+      const onChange = () => {
+        if (pc.iceGatheringState === "complete") {
+          pc.removeEventListener("icegatheringstatechange", onChange);
+          resolve();
+        }
+      };
+      pc.addEventListener("icegatheringstatechange", onChange);
+      // Hard timeout: 3s. LAN ICE usually finishes in <300ms.
+      setTimeout(resolve, 3000);
+    });
+
+    const res = await fetch("/webrtc/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sdp: pc.localDescription.sdp,
+        type: pc.localDescription.type,
+      }),
+    });
+    if (!res.ok) throw new Error(`/webrtc/connect HTTP ${res.status}`);
+    const answer = await res.json();
+    if (!answer.sdp || !answer.type) throw new Error("Bad answer payload");
+
+    await pc.setRemoteDescription(new RTCSessionDescription({ sdp: answer.sdp, type: answer.type }));
+    console.log("[webrtc] connection established");
+    return true;
+  } catch (err) {
+    console.error("[webrtc] failed", err);
+    if (state.webrtcPc) {
+      try { state.webrtcPc.close(); } catch {}
+      state.webrtcPc = null;
+    }
+    return false;
   }
 }
 

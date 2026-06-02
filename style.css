@@ -67,9 +67,14 @@ body {
 #app:not(.mode-live) #camera-video,
 #app:not(.mode-live) #wrapper-stream { visibility: hidden; }
 
-/* in wrapper mode, hide native video, show MJPEG img */
-#app.wrapper-mode #camera-video { display: none; }
-#app.wrapper-mode #wrapper-stream { display: block; }
+/* wrapper-mode MJPEG: hide <video>, show <img id=wrapper-stream> */
+#app.wrapper-mode.wrapper-mjpeg #camera-video { display: none; }
+#app.wrapper-mode.wrapper-mjpeg #wrapper-stream { display: block; }
+
+/* wrapper-mode WebRTC: keep <video>, hide MJPEG img — the <video> srcObject
+   is set to the remote RTCPeerConnection stream by startWebRTC(). */
+#app.wrapper-mode.wrapper-webrtc #camera-video { display: block; }
+#app.wrapper-mode.wrapper-webrtc #wrapper-stream { display: none; }
 
 #debug-hud {
   position: absolute;
