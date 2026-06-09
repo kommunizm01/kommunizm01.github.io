@@ -1,4 +1,4 @@
-const CACHE_NAME = "aral-timelapse-shell-v1";
+const CACHE_NAME = "aral-timelapse-shell-v2";
 const SHELL_ASSETS = [
   "./",
   "./index.html",
@@ -6,7 +6,7 @@ const SHELL_ASSETS = [
   "./main.js",
   "./manifest.json",
   "./icon.png",
-  "https://unpkg.com/dexie@4.0.8/dist/dexie.min.js",
+  "./dexie.min.js",
 ];
 
 self.addEventListener("install", (event) => {
