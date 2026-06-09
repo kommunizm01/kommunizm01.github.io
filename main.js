@@ -126,6 +126,11 @@ async function init() {
   setupVisibilityHandlers();
 
   await startCamera();
+  // Sync our capture cadence to the iPhone on first connect so iPhone's
+  // ring-buffer rate matches our config (default differs between sides).
+  if (state.wrapper && state.wrapper.snapshotApi === "buffered") {
+    pushIntervalToWrapper(config.CAPTURE_INTERVAL_SECONDS);
+  }
   scheduleNextCapture(0);
   resetIdleTimer();
 }
@@ -372,18 +377,133 @@ function showPermissionPrompt(err) {
 
 function scheduleNextCapture(delayMs) {
   clearTimeout(state.captureTimer);
-  const wait = delayMs != null ? delayMs : config.CAPTURE_INTERVAL_SECONDS * 1000;
+  let wait;
+  if (delayMs != null) {
+    wait = delayMs;
+  } else if (state.wrapper && state.wrapper.snapshotApi === "buffered") {
+    // Buffered mode: poll faster than iPhone's capture interval so we drain
+    // promptly. Cap at 10s so we don't hammer the network on long intervals.
+    wait = Math.min(10_000, Math.max(2_000, (config.CAPTURE_INTERVAL_SECONDS * 1000) / 3));
+  } else {
+    wait = config.CAPTURE_INTERVAL_SECONDS * 1000;
+  }
   state.captureTimer = setTimeout(captureLoop, wait);
+}
+
+async function pushIntervalToWrapper(seconds) {
+  if (!state.wrapper || state.wrapper.snapshotApi !== "buffered") return;
+  try {
+    const res = await fetch("/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intervalSeconds: seconds }),
+    });
+    if (!res.ok) {
+      console.warn("[wrapper] /config rejected:", res.status);
+      return;
+    }
+    const data = await res.json();
+    state.wrapper.intervalSeconds = data.intervalSeconds;
+    console.log("[wrapper] interval synced:", data.intervalSeconds);
+  } catch (err) {
+    console.warn("[wrapper] /config push failed:", err.message || err);
+  }
 }
 
 async function captureLoop() {
   try {
-    await captureFrame();
+    // Wrapper with buffered snapshot API: drain whatever iPhone has, in order,
+    // back-filling anything we missed during network drops. Don't capture
+    // ourselves — the iPhone is the authoritative scheduler.
+    if (state.wrapper && state.wrapper.snapshotApi === "buffered") {
+      await drainSnapshots();
+    } else {
+      await captureFrame();
+    }
   } catch (err) {
     console.error("Capture failed", err);
   } finally {
     scheduleNextCapture();
   }
+}
+
+async function drainSnapshots() {
+  let manifest;
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch("/snapshots/list", { cache: "no-store", signal: controller.signal });
+    clearTimeout(t);
+    if (!res.ok) return;
+    manifest = await res.json();
+  } catch (err) {
+    console.warn("[drain] manifest fetch failed:", err.message || err);
+    return;
+  }
+  if (!manifest || !Array.isArray(manifest.snapshots) || manifest.snapshots.length === 0) return;
+
+  // Already-stored ts set for O(1) lookup.
+  const have = new Set(state.frameIndex);
+  const missing = manifest.snapshots.filter((s) => !have.has(s.ts));
+  if (missing.length === 0) return;
+  console.log(`[drain] ${missing.length} missing of ${manifest.snapshots.length} buffered`);
+
+  // Fetch oldest-first so a partial drain still leaves a contiguous tail.
+  for (const entry of missing) {
+    const blob = await fetchValidatedSnapshotAt(entry.ts);
+    if (!blob) {
+      // Skip but keep going — a later one may succeed and we'll try this ts
+      // again on the next drain tick.
+      continue;
+    }
+    flashRecDot();
+    try {
+      await db.frames.put({ ts: entry.ts, blob });
+    } catch (err) {
+      if (isQuotaError(err)) {
+        await aggressiveTrim();
+        try { await db.frames.put({ ts: entry.ts, blob }); } catch { continue; }
+      } else {
+        console.warn("[drain] put failed", err);
+        continue;
+      }
+    }
+    state.lastFrameTs = entry.ts;
+    state.frameIndex.push(entry.ts);
+  }
+
+  // Order may have got broken by retries — re-sort.
+  state.frameIndex.sort((a, b) => a - b);
+
+  await trimOldFrames();
+  updateStatusForFrameCount();
+  renderTimelineLabels();
+  updateDebug();
+
+  if (state.mode === "live") updateTimelineThumb(1);
+}
+
+async function fetchValidatedSnapshotAt(ts) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const tHandle = setTimeout(() => controller.abort(), 4000);
+    try {
+      const res = await fetch(`/snapshot?ts=${ts}`, { cache: "no-store", signal: controller.signal });
+      clearTimeout(tHandle);
+      if (!res.ok) continue;
+      const declared = Number(res.headers.get("content-length") || 0);
+      const buf = await res.arrayBuffer();
+      if (!buf || buf.byteLength === 0) continue;
+      if (declared && declared !== buf.byteLength) continue;
+      const v = new Uint8Array(buf);
+      if (v[0] !== 0xFF || v[1] !== 0xD8) continue;
+      if (v[v.length - 2] !== 0xFF || v[v.length - 1] !== 0xD9) continue;
+      return new Blob([buf], { type: "image/jpeg" });
+    } catch (err) {
+      clearTimeout(tHandle);
+    }
+  }
+  return null;
 }
 
 async function captureFrame() {
@@ -924,6 +1044,7 @@ async function saveSettings() {
   if (!Number.isFinite(newQuality) || newQuality < 0.1 || newQuality > 1) return alert("Quality 0.1-1.0");
 
   const cameraChanged = newCamera !== config.CAMERA_FACING || newDevice !== config.CAMERA_DEVICE_ID;
+  const intervalChanged = newInterval !== config.CAPTURE_INTERVAL_SECONDS;
 
   config.CAPTURE_INTERVAL_SECONDS = newInterval;
   config.WINDOW_HOURS = newWindow;
@@ -933,6 +1054,9 @@ async function saveSettings() {
   config.CAMERA_DEVICE_ID = newDevice;
   config.IMAGE_QUALITY = newQuality;
   saveConfig();
+
+  // Push new interval to iPhone so its ring-buffer cadence matches us.
+  if (intervalChanged) pushIntervalToWrapper(newInterval);
 
   await trimOldFrames();
 
