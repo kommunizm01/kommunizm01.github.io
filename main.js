@@ -131,8 +131,13 @@ async function init() {
 }
 
 async function detectWrapper() {
+  // Hard timeout: a hung fetch (server unreachable, network mid-drop) must not
+  // block init forever. 2s is generous on a LAN, escape-hatch on a bad WAN.
+  const controller = new AbortController();
+  const tHandle = setTimeout(() => controller.abort(), 2000);
   try {
-    const res = await fetch("/capabilities.json", { cache: "no-store" });
+    const res = await fetch("/capabilities.json", { cache: "no-store", signal: controller.signal });
+    clearTimeout(tHandle);
     if (!res.ok) { state.wrapper = false; return; }
     const data = await res.json();
     if (data && data.wrapper === true) {
@@ -145,8 +150,10 @@ async function detectWrapper() {
     } else {
       state.wrapper = false;
     }
-  } catch {
+  } catch (err) {
+    clearTimeout(tHandle);
     state.wrapper = false;
+    console.warn("[wrapper] detect failed:", err.message || err);
   }
 }
 
