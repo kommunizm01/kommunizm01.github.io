@@ -390,16 +390,13 @@ async function captureFrame() {
   let blob;
 
   if (state.wrapper) {
-    // Wrapper mode: pull JPEG straight from the local Android server.
-    try {
-      const res = await fetch("/snapshot.jpg?t=" + Date.now(), { cache: "no-store" });
-      if (!res.ok) return;
-      blob = await res.blob();
-      if (!blob || blob.size === 0) return;
-    } catch (err) {
-      console.warn("Snapshot fetch failed", err);
-      return;
-    }
+    // Wrapper mode: pull JPEG from the local capture server.
+    // Defensive: timeout, content-length consistency, JPEG magic bytes,
+    // and a single retry. On a flaky Wi-Fi the fetch can return a
+    // truncated body with no error; we'd otherwise store a corrupt blob
+    // that renders blank when scrubbed later.
+    blob = await fetchValidatedSnapshot();
+    if (!blob) return;
   } else {
     if (!state.stream || !els.video.videoWidth) return;
 
@@ -1080,6 +1077,48 @@ async function exportVideo() {
     stream.getTracks().forEach((t) => t.stop());
     setExportUiState(false);
   }
+}
+
+async function fetchValidatedSnapshot() {
+  // Two attempts with a 4s timeout each. Validates Content-Length matches
+  // received bytes and that the body starts with the JPEG SOI marker (FFD8)
+  // and ends with EOI (FFD9). Anything else → drop, return null.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const tHandle = setTimeout(() => controller.abort(), 4000);
+    try {
+      const res = await fetch("/snapshot.jpg?t=" + Date.now(), {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      clearTimeout(tHandle);
+      if (!res.ok) continue;
+
+      const declared = Number(res.headers.get("content-length") || 0);
+      const buf = await res.arrayBuffer();
+      if (!buf || buf.byteLength === 0) continue;
+      if (declared && declared !== buf.byteLength) {
+        console.warn(`[snapshot] truncated: ${buf.byteLength}/${declared} bytes`);
+        continue;
+      }
+      const view = new Uint8Array(buf);
+      if (view[0] !== 0xFF || view[1] !== 0xD8) {
+        console.warn("[snapshot] missing JPEG SOI marker");
+        continue;
+      }
+      // EOI check on last two bytes — catches truncation that slipped
+      // past content-length (e.g. server didn't set it).
+      if (view[view.length - 2] !== 0xFF || view[view.length - 1] !== 0xD9) {
+        console.warn("[snapshot] missing JPEG EOI marker");
+        continue;
+      }
+      return new Blob([buf], { type: "image/jpeg" });
+    } catch (err) {
+      clearTimeout(tHandle);
+      console.warn(`[snapshot] attempt ${attempt + 1} failed:`, err.message || err);
+    }
+  }
+  return null;
 }
 
 function blobToImage(blob) {
