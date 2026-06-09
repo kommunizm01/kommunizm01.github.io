@@ -82,6 +82,8 @@ const state = {
   webrtcPc: null,        // active RTCPeerConnection when wrapper transport=webrtc
   failedTs: new Set(),   // snapshot timestamps that returned 404 or invalid JPEG — never retry
   liveWatchdog: null,    // interval id; revives the live preview if frames stall
+  playbackRing: null,    // pre-decoded image ring for idle playback
+  playbackFillCursor: 0, // next frameIndex position to fetch into the ring
 };
 
 function loadConfig() {
@@ -1003,6 +1005,18 @@ function resetIdleTimer() {
   state.idleTimer = setTimeout(startIdlePlayback, config.IDLE_TIMEOUT_SECONDS * 1000);
 }
 
+/**
+ * Idle playback uses a decoded-image prefetch ring so swaps are instant.
+ *
+ * Each slot holds { ts, url, image } where `image` has already finished
+ * decoding. On every tick we render the next slot (immediate DOM swap, no
+ * decode wait), revoke the now-stale URL, and asynchronously fill the slot
+ * with the frame N positions ahead. Without this, fast playback (>10 fps)
+ * shows blank flashes between frames because IDB read + blob URL creation
+ * + image decode exceeds the inter-frame interval.
+ */
+const PLAYBACK_PREFETCH = 6;
+
 function startIdlePlayback() {
   if (state.frameIndex.length < MIN_FRAMES_BEFORE_DISPLAY) {
     resetIdleTimer();
@@ -1011,29 +1025,88 @@ function startIdlePlayback() {
   state.mode = "idle-playback";
   state.playbackIndex = 0;
   applyModeClass();
-
   showPlaybackIndicator();
 
   const fps = computeFps();
   const intervalMs = Math.max(16, 1000 / fps);
 
+  // Build the prefetch ring and seed it with the first PLAYBACK_PREFETCH
+  // frames in parallel so the first tick already has a decoded image.
+  state.playbackRing = new Array(PLAYBACK_PREFETCH).fill(null);
+  state.playbackFillCursor = 0;
+  const seedPromises = [];
+  for (let i = 0; i < PLAYBACK_PREFETCH && i < state.frameIndex.length; i++) {
+    seedPromises.push(fillPlaybackSlot(i, state.frameIndex[i]));
+    state.playbackFillCursor = i + 1;
+  }
+
   clearInterval(state.playbackTimer);
-  state.playbackTimer = setInterval(() => {
-    if (state.frameIndex.length === 0) return;
-    if (state.playbackIndex >= state.frameIndex.length) {
-      state.playbackIndex = 0;
+  Promise.all(seedPromises).then(() => {
+    state.playbackTimer = setInterval(playbackTick, intervalMs);
+  });
+}
+
+async function fillPlaybackSlot(slot, ts) {
+  try {
+    const frame = await db.frames.get(ts);
+    if (!frame || !frame.blob) return;
+    const url = URL.createObjectURL(frame.blob);
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = url;
+    });
+    if (img.decode) await img.decode().catch(() => {});
+    state.playbackRing[slot] = { ts, url, image: img };
+  } catch (err) {
+    state.playbackRing[slot] = null;
+  }
+}
+
+function playbackTick() {
+  if (!state.playbackRing || state.frameIndex.length === 0) return;
+
+  const slot = state.playbackIndex % PLAYBACK_PREFETCH;
+  const entry = state.playbackRing[slot];
+
+  if (entry) {
+    // Instant DOM swap — image is already decoded.
+    els.display.src = entry.url;
+    state.lastDisplayedTs = entry.ts;
+    // Free the previous frame's URL one frame later so the browser keeps
+    // the bitmap alive across the swap.
+    if (state.currentObjectUrl && state.currentObjectUrl !== entry.url) {
+      URL.revokeObjectURL(state.currentObjectUrl);
     }
-    const ts = state.frameIndex[state.playbackIndex];
-    showFrameByTs(ts);
+    state.currentObjectUrl = entry.url;
     updateTimelineThumb(state.playbackIndex / Math.max(1, state.frameIndex.length - 1));
-    state.playbackIndex += 1;
-  }, intervalMs);
+  }
+
+  // Schedule the next slot's refill (PLAYBACK_PREFETCH frames ahead).
+  const nextTs = state.frameIndex[state.playbackFillCursor % state.frameIndex.length];
+  state.playbackFillCursor = (state.playbackFillCursor + 1) % state.frameIndex.length;
+  // Don't await — fire and forget; if it's not ready by the time we cycle
+  // back to this slot we just skip that tick's swap (showing previous frame).
+  fillPlaybackSlot(slot, nextTs);
+
+  state.playbackIndex = (state.playbackIndex + 1) % state.frameIndex.length;
 }
 
 function stopIdlePlayback() {
   clearInterval(state.playbackTimer);
   state.playbackTimer = null;
   hidePlaybackIndicator();
+
+  // Tear down prefetch ring + revoke held URLs.
+  if (state.playbackRing) {
+    for (const entry of state.playbackRing) {
+      if (entry && entry.url && entry.url !== state.currentObjectUrl) {
+        URL.revokeObjectURL(entry.url);
+      }
+    }
+    state.playbackRing = null;
+  }
 }
 
 function showPlaybackIndicator() {
