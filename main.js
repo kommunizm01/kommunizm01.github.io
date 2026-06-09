@@ -80,6 +80,8 @@ const state = {
   longPressTimer: null,
   wrapper: null,         // null = not detected yet, false = browser, object = wrapper info
   webrtcPc: null,        // active RTCPeerConnection when wrapper transport=webrtc
+  failedTs: new Set(),   // snapshot timestamps that returned 404 or invalid JPEG — never retry
+  liveWatchdog: null,    // interval id; revives the live preview if frames stall
 };
 
 function loadConfig() {
@@ -219,6 +221,7 @@ async function startCamera() {
     }
     state.stream = { __wrapper: true };
     els.permissionPrompt.classList.add("hidden");
+    startLiveWatchdog();
 
     const transport = (state.wrapper.transport || "mjpeg").toLowerCase();
     if (transport === "webrtc" && typeof RTCPeerConnection !== "undefined") {
@@ -363,6 +366,72 @@ async function startWebRTC() {
   }
 }
 
+/**
+ * Live-feed watchdog. Detects when the visible live source has stopped
+ * delivering frames and reconnects.
+ *
+ * MJPEG: an <img> reading a multipart/x-mixed-replace stream cannot
+ * auto-reconnect if the TCP socket closes mid-stream — the image just
+ * freezes on the last received frame. We poke its src every few seconds
+ * if nothing has loaded recently.
+ *
+ * WebRTC: if no frame has decoded in 4s we tear down the peer connection
+ * and revert to MJPEG; PWA will attempt WebRTC again next startCamera.
+ */
+function startLiveWatchdog() {
+  if (state.liveWatchdog) clearInterval(state.liveWatchdog);
+
+  const stream = document.getElementById("wrapper-stream");
+  let lastImgComplete = false;
+  let lastVideoTime = -1;
+  let stallTicks = 0;
+
+  state.liveWatchdog = setInterval(() => {
+    const app = document.getElementById("app");
+
+    // MJPEG path: <img> in wrapper-mjpeg mode.
+    if (app.classList.contains("wrapper-mjpeg") && stream) {
+      // An MJPEG <img>'s `complete` flips false during multipart chunks
+      // and true when idle/closed. If it's been "complete" for several
+      // ticks AND we're not in a transitional state, the stream stopped.
+      if (stream.complete && lastImgComplete) {
+        stallTicks++;
+        if (stallTicks >= 2) {
+          console.warn("[live] MJPEG stall — reconnecting");
+          stream.src = "/stream.mjpg?t=" + Date.now();
+          stallTicks = 0;
+        }
+      } else {
+        stallTicks = 0;
+      }
+      lastImgComplete = stream.complete;
+      return;
+    }
+
+    // WebRTC path: <video> in wrapper-webrtc mode.
+    if (app.classList.contains("wrapper-webrtc")) {
+      const v = els.video;
+      if (!v || v.readyState < 2) return;
+      if (v.currentTime === lastVideoTime) {
+        stallTicks++;
+        if (stallTicks >= 2) {
+          console.warn("[live] WebRTC stall — reverting to MJPEG");
+          if (state.webrtcPc) { try { state.webrtcPc.close(); } catch {} state.webrtcPc = null; }
+          v.srcObject = null;
+          app.classList.remove("wrapper-webrtc");
+          app.classList.add("wrapper-mjpeg");
+          if (stream) stream.src = "/stream.mjpg?t=" + Date.now();
+          stallTicks = 0;
+        }
+      } else {
+        stallTicks = 0;
+      }
+      lastVideoTime = v.currentTime;
+      return;
+    }
+  }, 2000);
+}
+
 function showPermissionPrompt(err) {
   els.permissionPrompt.classList.remove("hidden");
   if (err && err.name === "NotAllowedError") {
@@ -442,20 +511,29 @@ async function drainSnapshots() {
   }
   if (!manifest || !Array.isArray(manifest.snapshots) || manifest.snapshots.length === 0) return;
 
-  // Already-stored ts set for O(1) lookup.
+  // Already-stored ts set + permanently-missing ts set for O(1) lookup.
   const have = new Set(state.frameIndex);
-  const missing = manifest.snapshots.filter((s) => !have.has(s.ts));
+  const missing = manifest.snapshots.filter(
+    (s) => !have.has(s.ts) && !state.failedTs.has(s.ts)
+  );
   if (missing.length === 0) return;
   console.log(`[drain] ${missing.length} missing of ${manifest.snapshots.length} buffered`);
 
   // Fetch oldest-first so a partial drain still leaves a contiguous tail.
   for (const entry of missing) {
-    const blob = await fetchValidatedSnapshotAt(entry.ts);
-    if (!blob) {
-      // Skip but keep going — a later one may succeed and we'll try this ts
-      // again on the next drain tick.
+    const result = await fetchValidatedSnapshotAt(entry.ts);
+    if (result === "404" || result === "invalid") {
+      // Hard miss — iPhone evicted this ts, or body is permanently garbage.
+      // Blacklist so we don't keep hammering for it on every drain tick.
+      state.failedTs.add(entry.ts);
       continue;
     }
+    if (!result) {
+      // Transient (timeout, network drop) — leave it unmarked so we retry
+      // on the next drain tick.
+      continue;
+    }
+    const blob = result;
     flashRecDot();
     try {
       await db.frames.put({ ts: entry.ts, blob });
@@ -483,27 +561,31 @@ async function drainSnapshots() {
   if (state.mode === "live") updateTimelineThumb(1);
 }
 
+// Returns: Blob (success), "404" (permanently gone), "invalid" (bad JPEG),
+// or null (transient — retry later).
 async function fetchValidatedSnapshotAt(ts) {
+  let sawHardMiss = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
     const tHandle = setTimeout(() => controller.abort(), 4000);
     try {
       const res = await fetch(`/snapshot?ts=${ts}`, { cache: "no-store", signal: controller.signal });
       clearTimeout(tHandle);
+      if (res.status === 404) { sawHardMiss = true; break; }
       if (!res.ok) continue;
       const declared = Number(res.headers.get("content-length") || 0);
       const buf = await res.arrayBuffer();
       if (!buf || buf.byteLength === 0) continue;
       if (declared && declared !== buf.byteLength) continue;
       const v = new Uint8Array(buf);
-      if (v[0] !== 0xFF || v[1] !== 0xD8) continue;
-      if (v[v.length - 2] !== 0xFF || v[v.length - 1] !== 0xD9) continue;
+      if (v[0] !== 0xFF || v[1] !== 0xD8) { sawHardMiss = true; break; }
+      if (v[v.length - 2] !== 0xFF || v[v.length - 1] !== 0xD9) { sawHardMiss = true; break; }
       return new Blob([buf], { type: "image/jpeg" });
     } catch (err) {
       clearTimeout(tHandle);
     }
   }
-  return null;
+  return sawHardMiss ? "404" : null;
 }
 
 async function captureFrame() {
