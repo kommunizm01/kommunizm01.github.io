@@ -1225,10 +1225,35 @@ async function saveSettings() {
 
 async function clearAllFrames() {
   if (!confirm("Delete all stored frames? This cannot be undone.")) return;
+
+  // In buffered wrapper mode the iPhone has its own ring buffer of recent
+  // snapshots. If we just wipe IDB, the next drain tick will refill from
+  // the manifest within seconds — the user perceives "clear" as a no-op.
+  // Snapshot the iPhone's current manifest and blacklist every ts in it,
+  // so only frames captured AFTER this clear get drained.
+  if (state.wrapper && state.wrapper.snapshotApi === "buffered") {
+    try {
+      const res = await fetch("/snapshots/list", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        for (const s of data.snapshots || []) state.failedTs.add(s.ts);
+        console.log(`[clear] blacklisted ${data.snapshots.length} iPhone-buffered ts`);
+      }
+    } catch (err) {
+      console.warn("[clear] couldn't snapshot iPhone manifest:", err.message || err);
+    }
+  }
+
   await db.frames.clear();
   state.frameIndex = [];
   state.lastDisplayedTs = null;
   state.lastFrameTs = null;
+
+  // Stop any in-flight idle playback so its prefetched URLs don't repaint.
+  stopIdlePlayback();
+  state.mode = "live";
+  applyModeClass();
+
   els.display.removeAttribute("src");
   if (state.currentObjectUrl) {
     URL.revokeObjectURL(state.currentObjectUrl);
@@ -1238,6 +1263,8 @@ async function clearAllFrames() {
   await updateSettingsStats();
   renderTimelineLabels();
   updateTimelineThumb(1);
+  updateDebug();
+  console.log("[clear] frames=0");
 }
 
 /* ───────── Video export ──────────────────────────────────────────────

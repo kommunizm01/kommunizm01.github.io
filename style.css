@@ -134,46 +134,40 @@ body {
   z-index: 30;
 }
 
+/* Settings affordance — visually invisible, but still a 64×64 hit area in
+ * the top-right corner. Operator knows it's there; visitors do not.
+ * Three other entry points exist: keyboard "s", long-press bottom-left,
+ * tap the debug HUD top-left. */
 #settings-btn {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 0;
+  right: 0;
+  width: 64px;
+  height: 64px;
   z-index: 45;
   appearance: none;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 400;
-  letter-spacing: 0.18em;
-  text-transform: lowercase;
-  color: var(--terracotta);
-  background: rgba(242, 239, 233, 0.92);
-  border: 1px solid rgba(194, 138, 110, 0.45);
-  border-radius: 999px;
-  padding: 10px 18px;
-  min-height: 44px;
-  min-width: 100px;
-  cursor: pointer;
+  font-size: 0;                      /* drop "settings" text */
+  color: transparent;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: default;
   pointer-events: auto;
   touch-action: manipulation;
-  -webkit-tap-highlight-color: rgba(194, 138, 110, 0.25);
-  box-shadow: 0 1px 4px rgba(80, 50, 30, 0.08);
-  transition:
-    background 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
-    transform 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-#settings-btn:hover {
-  background: rgba(194, 138, 110, 0.12);
-}
-
-#settings-btn:active {
-  background: rgba(194, 138, 110, 0.22);
-  transform: scale(0.96);
-}
-
-#settings-btn:focus-visible {
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: none;
   outline: none;
-  box-shadow: 0 0 0 3px rgba(194, 138, 110, 0.35);
+}
+
+#settings-btn:focus,
+#settings-btn:focus-visible,
+#settings-btn:hover,
+#settings-btn:active {
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
 }
 
 .rec-dot.active {
