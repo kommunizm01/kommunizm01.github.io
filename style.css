@@ -76,30 +76,55 @@ body {
 #app.wrapper-mode.wrapper-webrtc #camera-video { display: block; }
 #app.wrapper-mode.wrapper-webrtc #wrapper-stream { display: none; }
 
-#debug-hud {
+/* Debug HUD kept in the DOM (updateDebug still pokes its text content for
+ * console-via-Web-Inspector visibility) but hidden visually. */
+#debug-hud { display: none; }
+
+#timelapse-btn {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  font-size: 12px;
-  letter-spacing: 0.05em;
-  color: var(--ink-soft);
-  background: rgba(242, 239, 233, 0.6);
-  padding: 8px 12px;
-  border-radius: 4px;
-  pointer-events: auto;
-  cursor: pointer;
-  z-index: 40;
-  touch-action: manipulation;
+  top: 14px;
+  left: 14px;
+  z-index: 45;
+  appearance: none;
+  font-family: var(--font-mono);
+  font-size: 14px;
   font-weight: 400;
-  min-height: 36px;
-  min-width: 80px;
-  display: flex;
-  align-items: center;
-  -webkit-tap-highlight-color: rgba(194, 138, 110, 0.2);
+  letter-spacing: 0.18em;
+  text-transform: lowercase;
+  color: var(--terracotta);
+  background: rgba(242, 239, 233, 0.92);
+  border: 1px solid rgba(194, 138, 110, 0.45);
+  border-radius: 999px;
+  padding: 10px 18px;
+  min-height: 44px;
+  min-width: 110px;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(194, 138, 110, 0.25);
+  box-shadow: 0 1px 4px rgba(80, 50, 30, 0.08);
+  transition:
+    background 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-#debug-hud:active {
-  background: rgba(194, 138, 110, 0.15);
+#timelapse-btn:hover { background: rgba(194, 138, 110, 0.12); }
+
+#timelapse-btn:active {
+  background: rgba(194, 138, 110, 0.22);
+  transform: scale(0.96);
+}
+
+#timelapse-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(194, 138, 110, 0.35);
+}
+
+/* When idle playback is the current mode, mark the button as "active" so
+ * the operator can tell at a glance which mode they're in. */
+#app.mode-idle-playback #timelapse-btn {
+  background: rgba(194, 138, 110, 0.16);
+  text-decoration: underline;
 }
 
 .status-message {

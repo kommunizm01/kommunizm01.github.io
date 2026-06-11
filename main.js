@@ -62,6 +62,7 @@ const els = {
   debug: document.getElementById("debug-hud"),
   app: document.getElementById("app"),
   settingsBtn: document.getElementById("settings-btn"),
+  timelapseBtn: document.getElementById("timelapse-btn"),
 };
 
 const state = {
@@ -831,11 +832,29 @@ function bindUi() {
   bindSettings();
   bindPermission();
   bindLiveLabel();
+  bindTimelapseBtn();
   bindKeyboard();
   bindDebugHud();
 
   document.addEventListener("touchstart", onAnyTouch, { passive: true });
   document.addEventListener("mousedown", onAnyTouch);
+}
+
+function bindTimelapseBtn() {
+  if (!els.timelapseBtn) return;
+  const trigger = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (state.frameIndex.length < MIN_FRAMES_BEFORE_DISPLAY) {
+      console.warn("[timelapse] not enough frames yet:", state.frameIndex.length);
+      return;
+    }
+    // Force-start idle playback regardless of timeout.
+    clearTimeout(state.idleTimer);
+    startIdlePlayback();
+  };
+  els.timelapseBtn.addEventListener("click", trigger);
+  els.timelapseBtn.addEventListener("pointerdown", trigger);
 }
 
 function bindDebugHud() {
@@ -1003,6 +1022,10 @@ function bindPermission() {
 function onAnyTouch(e) {
   if (!els.settingsPanel.classList.contains("hidden")) return;
   if (e.target.closest("#timeline")) return;
+  // Don't treat taps on the top-corner mode buttons as a "user wants to
+  // exit playback" gesture — they ARE the mode switches.
+  if (e.target.closest("#timelapse-btn")) return;
+  if (e.target.closest("#settings-btn")) return;
   if (state.mode === "idle-playback") {
     stopIdlePlayback();
     enterScrubMode();
