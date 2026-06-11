@@ -111,6 +111,19 @@ function computeFps() {
 }
 
 async function init() {
+  // Belt-and-braces: never let a broken <img> render the browser's
+  // built-in "?" icon. Clearing src forces the element back to empty.
+  const onImgError = (e) => {
+    const el = e.target;
+    if (el && el.tagName === "IMG" && el.getAttribute("src")) {
+      console.warn(`[img] load failed for ${el.id} — clearing src`);
+      el.removeAttribute("src");
+    }
+  };
+  els.display.addEventListener("error", onImgError);
+  const ws = document.getElementById("wrapper-stream");
+  if (ws) ws.addEventListener("error", onImgError);
+
   await detectWrapper();
 
   registerServiceWorker();
@@ -1088,24 +1101,30 @@ function playbackTick() {
   const slot = state.playbackIndex % PLAYBACK_PREFETCH;
   const entry = state.playbackRing[slot];
 
-  if (entry) {
+  if (entry && entry.url) {
     // Instant DOM swap — image is already decoded.
+    const previousUrl = state.currentObjectUrl;
     els.display.src = entry.url;
-    state.lastDisplayedTs = entry.ts;
-    // Free the previous frame's URL one frame later so the browser keeps
-    // the bitmap alive across the swap.
-    if (state.currentObjectUrl && state.currentObjectUrl !== entry.url) {
-      URL.revokeObjectURL(state.currentObjectUrl);
-    }
     state.currentObjectUrl = entry.url;
+    state.lastDisplayedTs = entry.ts;
     updateTimelineThumb(state.playbackIndex / Math.max(1, state.frameIndex.length - 1));
+    // Revoke the previously-displayed URL one rAF later so the browser
+    // has the chance to commit the new bitmap to screen first.
+    if (previousUrl && previousUrl !== entry.url) {
+      requestAnimationFrame(() => URL.revokeObjectURL(previousUrl));
+    }
   }
+
+  // CONSUME the slot — set to null so a fast loop-around (when the refill
+  // hasn't returned in time) doesn't reassign the visible <img> a
+  // now-revoked URL, which is what produces the broken-image ("?") icon.
+  state.playbackRing[slot] = null;
 
   // Schedule the next slot's refill (PLAYBACK_PREFETCH frames ahead).
   const nextTs = state.frameIndex[state.playbackFillCursor % state.frameIndex.length];
   state.playbackFillCursor = (state.playbackFillCursor + 1) % state.frameIndex.length;
-  // Don't await — fire and forget; if it's not ready by the time we cycle
-  // back to this slot we just skip that tick's swap (showing previous frame).
+  // Fire-and-forget. If a later tick reads slot before this resolves, the
+  // null check above keeps the prior frame visible — no broken icon.
   fillPlaybackSlot(slot, nextTs);
 
   state.playbackIndex = (state.playbackIndex + 1) % state.frameIndex.length;
