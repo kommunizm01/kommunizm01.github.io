@@ -704,40 +704,58 @@ function flashRecDot() {
   setTimeout(() => els.recDot.classList.remove("active"), 1200);
 }
 
+// Monotonic counter so rapidly-scheduled showFrameByTs calls (scrub drag)
+// can detect they're stale and skip the visible swap.
+let _showFrameGen = 0;
+
 async function showFrameByTs(ts) {
   if (state.lastDisplayedTs === ts) return;
+
+  const myGen = ++_showFrameGen;
+
   const frame = await db.frames.get(ts);
+  if (myGen !== _showFrameGen) return;          // a newer call superseded us
   if (!frame || !frame.blob) {
     console.warn("showFrameByTs: no frame for ts", ts);
     return;
   }
 
+  // Decode the new image on an OFF-SCREEN <img> first. Setting the visible
+  // img's src and awaiting decode would blank the canvas for the duration
+  // of the decode, especially on iOS Safari. We swap visible src only
+  // after the bitmap is fully decoded and cached by the browser.
   const url = URL.createObjectURL(frame.blob);
-  const previousUrl = state.currentObjectUrl;
+  const tmp = new Image();
+  tmp.decoding = "sync";
+  tmp.src = url;
 
   try {
-    if (els.display.decode) {
-      els.display.src = url;
-      await els.display.decode().catch(() => {});
+    if (tmp.decode) {
+      await tmp.decode();
     } else {
       await new Promise((resolve, reject) => {
-        const tmp = new Image();
         tmp.onload = resolve;
         tmp.onerror = reject;
-        tmp.src = url;
-      }).catch(() => {});
-      els.display.src = url;
+      });
     }
-  } catch (err) {
-    console.warn("Image decode failed", err);
+  } catch {
+    URL.revokeObjectURL(url);
+    return;
+  }
+  if (myGen !== _showFrameGen) {
+    // A newer scrub destination won the race; drop this one.
     URL.revokeObjectURL(url);
     return;
   }
 
+  const previousUrl = state.currentObjectUrl;
+  els.display.src = url;
   state.currentObjectUrl = url;
   state.lastDisplayedTs = ts;
+  // Defer the revoke one frame so the browser has the chance to flush the
+  // previous bitmap to screen one last time before the resource is freed.
   if (previousUrl && previousUrl !== url) {
-    URL.revokeObjectURL(previousUrl);
+    requestAnimationFrame(() => URL.revokeObjectURL(previousUrl));
   }
   updateDebug();
 }
