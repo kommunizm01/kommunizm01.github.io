@@ -718,8 +718,8 @@ function flashRecDot() {
   setTimeout(() => els.recDot.classList.remove("active"), 1200);
 }
 
-// Monotonic counter so rapidly-scheduled showFrameByTs calls (scrub drag)
-// can detect they're stale and skip the visible swap.
+// Monotonic counter so a stale db.frames.get that finishes late can't
+// overwrite the visible <img> with an out-of-order frame.
 let _showFrameGen = 0;
 
 async function showFrameByTs(ts) {
@@ -728,44 +728,24 @@ async function showFrameByTs(ts) {
   const myGen = ++_showFrameGen;
 
   const frame = await db.frames.get(ts);
-  if (myGen !== _showFrameGen) return;          // a newer call superseded us
+  if (myGen !== _showFrameGen) return;          // newer call superseded us
   if (!frame || !frame.blob) {
     console.warn("showFrameByTs: no frame for ts", ts);
     return;
   }
 
-  // Decode the new image on an OFF-SCREEN <img> first. Setting the visible
-  // img's src and awaiting decode would blank the canvas for the duration
-  // of the decode, especially on iOS Safari. We swap visible src only
-  // after the bitmap is fully decoded and cached by the browser.
+  // EAGERLY swap visible src. The browser keeps the prior bitmap painted
+  // until the new one decodes (with a brief gap on some Safaris). This is
+  // the responsive path: scrubbing updates the image during the drag
+  // rather than only at touch-up. Idle playback uses a separate
+  // pre-decoded prefetch ring, so it doesn't go through this path.
   const url = URL.createObjectURL(frame.blob);
-  const tmp = new Image();
-  tmp.decoding = "sync";
-  tmp.src = url;
-
-  try {
-    if (tmp.decode) {
-      await tmp.decode();
-    } else {
-      await new Promise((resolve, reject) => {
-        tmp.onload = resolve;
-        tmp.onerror = reject;
-      });
-    }
-  } catch {
-    URL.revokeObjectURL(url);
-    return;
-  }
-  if (myGen !== _showFrameGen) {
-    // A newer scrub destination won the race; drop this one.
-    URL.revokeObjectURL(url);
-    return;
-  }
-
   const previousUrl = state.currentObjectUrl;
+
   els.display.src = url;
   state.currentObjectUrl = url;
   state.lastDisplayedTs = ts;
+
   // Defer the revoke one frame so the browser has the chance to flush the
   // previous bitmap to screen one last time before the resource is freed.
   if (previousUrl && previousUrl !== url) {
