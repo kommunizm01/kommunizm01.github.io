@@ -1326,17 +1326,31 @@ async function exportVideo() {
   const targetFps = Math.max(1, Math.round(computeFps()));
   const frameIntervalMs = 1000 / targetFps;
 
-  // Pick a usable mime type — VP9 is best, fall back to VP8, then naked WebM.
+  // Pick a usable mime type. Safari (iPad / iPhone) only ships MP4 + H.264;
+  // Chrome/Firefox prefer WebM. Try MP4 first because it's the universally
+  // playable container (Safari, Quicktime, social media, video editors),
+  // then fall back to WebM where MP4 isn't available.
   const candidates = [
+    "video/mp4;codecs=avc1.42E01F",      // H.264 Baseline 3.1 — broadest
+    "video/mp4;codecs=avc1",
+    "video/mp4;codecs=h264",
+    "video/mp4",
     "video/webm;codecs=vp9",
     "video/webm;codecs=vp8",
     "video/webm",
   ];
-  const mimeType = candidates.find((m) => MediaRecorder.isTypeSupported(m));
+  const mimeType = candidates.find(
+    (m) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)
+  );
   if (!mimeType) {
-    alert("No supported video encoder found.");
+    alert(
+      "Your browser doesn't support in-browser video encoding.\n\n" +
+      "Try a different browser (Chrome or Firefox on Mac/Windows). " +
+      "On the iPad, install iPadOS 17.4 or newer."
+    );
     return;
   }
+  const ext = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
 
   // Probe one frame to lock canvas dimensions to actual image size — handles
   // wrapper-mode 640x360 vs browser-mode 1280x720 uniformly.
@@ -1406,7 +1420,7 @@ async function exportVideo() {
     if (!blob || blob.size === 0) throw new Error("Recorder produced empty output");
 
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const filename = `aral-timelapse-${stamp}.webm`;
+    const filename = `aral-timelapse-${stamp}.${ext}`;
     triggerDownload(blob, filename);
 
     showExportProgress(totalFrames, totalFrames, `Saved ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
